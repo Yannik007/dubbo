@@ -47,6 +47,8 @@ import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /**
  * PojoUtils. Travel object deeply, and convert complex type to simple type.
@@ -65,7 +67,7 @@ public class PojoUtils {
     private static final Logger logger = LoggerFactory.getLogger(PojoUtils.class);
     private static final ConcurrentMap<String, Method> NAME_METHODS_CACHE = new ConcurrentHashMap<String, Method>();
     private static final ConcurrentMap<Class<?>, ConcurrentMap<String, Field>> CLASS_FIELD_CACHE = new ConcurrentHashMap<Class<?>, ConcurrentMap<String, Field>>();
-    private static final boolean GENERIC_WITH_CLZ = Boolean.parseBoolean(ConfigUtils.getProperty(CommonConstants.GENERIC_WITH_CLZ_KEY,"true"));
+    private static final boolean GENERIC_WITH_CLZ = Boolean.parseBoolean(ConfigUtils.getProperty(CommonConstants.GENERIC_WITH_CLZ_KEY, "true"));
 
     public static Object[] generalize(Object[] objs) {
         Object[] dests = new Object[objs.length];
@@ -171,6 +173,7 @@ public class PojoUtils {
         }
         for (Method method : pojo.getClass().getMethods()) {
             if (ReflectUtils.isBeanPropertyReadMethod(method)) {
+                ReflectUtils.makeAccessible(method);
                 try {
                     map.put(ReflectUtils.getPropertyNameFromBeanReadMethod(method), generalize(method.invoke(pojo), history));
                 } catch (Exception e) {
@@ -472,9 +475,7 @@ public class PojoUtils {
                             Method method = getSetterMethod(dest.getClass(), name, value.getClass());
                             Field field = getField(dest.getClass(), name);
                             if (method != null) {
-                                if (!method.isAccessible()) {
-                                    method.setAccessible(true);
-                                }
+                                ReflectUtils.makeAccessible(method);
                                 Type ptype = method.getGenericParameterTypes()[0];
                                 value = realize0(value, method.getParameterTypes()[0], ptype, history);
                                 try {
@@ -501,9 +502,7 @@ public class PojoUtils {
                     if (message instanceof String) {
                         try {
                             Field field = Throwable.class.getDeclaredField("detailMessage");
-                            if (!field.isAccessible()) {
-                                field.setAccessible(true);
-                            }
+                            ReflectUtils.makeAccessible(field);
                             field.set(dest, message);
                         } catch (Exception e) {
                         }
@@ -527,7 +526,7 @@ public class PojoUtils {
         if (!ArrayUtils.isEmpty(interfaces)) {
             for (Type type : interfaces) {
                 if (type instanceof ParameterizedType) {
-                    ParameterizedType t = (ParameterizedType)type;
+                    ParameterizedType t = (ParameterizedType) type;
                     if ("java.util.Map".equals(t.getRawType().getTypeName())) {
                         return t.getActualTypeArguments()[0];
                     }
@@ -582,14 +581,10 @@ public class PojoUtils {
                         }
                     }
                 }
-                constructor.setAccessible(true);
+                ReflectUtils.makeAccessible(constructor);
                 Object[] parameters = Arrays.stream(constructor.getParameterTypes()).map(PojoUtils::getDefaultValue).toArray();
                 return constructor.newInstance(parameters);
-            } catch (InstantiationException e) {
-                throw new RuntimeException(e.getMessage(), e);
-            } catch (IllegalAccessException e) {
-                throw new RuntimeException(e.getMessage(), e);
-            } catch (InvocationTargetException e) {
+            } catch (InstantiationException | InvocationTargetException | IllegalAccessException e) {
                 throw new RuntimeException(e.getMessage(), e);
             }
         }
@@ -597,6 +592,7 @@ public class PojoUtils {
 
     /**
      * return init value
+     *
      * @param parameterType
      * @return
      */
@@ -604,8 +600,14 @@ public class PojoUtils {
         if ("char".equals(parameterType.getName())) {
             return Character.MIN_VALUE;
         }
-        if ("bool".equals(parameterType.getName())) {
+        if ("boolean".equals(parameterType.getName())) {
             return false;
+        }
+        if ("byte".equals(parameterType.getName())) {
+            return (byte) 0;
+        }
+        if ("short".equals(parameterType.getName())) {
+            return (short) 0;
         }
         return parameterType.isPrimitive() ? 0 : null;
     }
@@ -638,7 +640,7 @@ public class PojoUtils {
         }
         try {
             result = cls.getDeclaredField(fieldName);
-            result.setAccessible(true);
+            ReflectUtils.makeAccessible(result);
         } catch (NoSuchFieldException e) {
             for (Field field : cls.getFields()) {
                 if (fieldName.equals(field.getName()) && ReflectUtils.isPublicInstanceField(field)) {
@@ -658,6 +660,21 @@ public class PojoUtils {
         return !ReflectUtils.isPrimitives(cls)
                 && !Collection.class.isAssignableFrom(cls)
                 && !Map.class.isAssignableFrom(cls);
+    }
+
+    /**
+     * Update the property if absent
+     *
+     * @param getterMethod the getter method
+     * @param setterMethod the setter method
+     * @param newValue     the new value
+     * @param <T>          the value type
+     * @since 2.7.8
+     */
+    public static <T> void updatePropertyIfAbsent(Supplier<T> getterMethod, Consumer<T> setterMethod, T newValue) {
+        if (newValue != null && getterMethod.get() == null) {
+            setterMethod.accept(newValue);
+        }
     }
 
 }
